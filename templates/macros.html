@@ -1,0 +1,9 @@
+{%- macro date_range(range) -%}
+    {%- if range.current -%}
+        {%- set end_formatted = "present" -%}
+    {%- else -%}
+        {%- set end_formatted = range.end_date | date(format="%b, %Y") -%}
+    {%- endif -%}
+		{%- set start_formatted = range.start_date | date(format="%b, %Y") -%}
+    {{ start_formatted }}--{{ end_formatted }}
+{%- endmacro date_range -%}
