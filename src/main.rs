@@ -112,6 +112,7 @@ struct Author {
     name: String,
     email: String,
     description: String,
+    summary: String,
     picture: String,
     phone: String,
     website: String,
