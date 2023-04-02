@@ -1,14 +1,33 @@
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use clap::Parser;
 use tectonic::errors::Result;
 use tectonic::{config, ctry, driver, status};
-use tera::{Context, Tera};
+use tera::{try_get_value, Context, Tera, Value};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use toml::value::Datetime;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(value_parser = parse_path)]
+    input_path: PathBuf,
+    #[arg(value_parser = parse_path)]
+    template_path: PathBuf,
+    template_filename: String,
+    #[arg(value_parser = parse_path)]
+    tex_root: PathBuf,
+    #[arg(value_parser = parse_path)]
+    output_root: PathBuf,
+}
+
+fn parse_path(s: &str) -> std::result::Result<PathBuf, String> {
+    Ok(Path::new(s).to_path_buf())
+}
 
 #[derive(Serialize, Deserialize)]
 struct Location {
@@ -43,7 +62,14 @@ struct Experience {
     #[serde(deserialize_with = "datetime_to_option_string")]
     end_date: Option<String>,
     current: bool,
+    display: Vec<String>,
     highlights: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct GradePointAverage {
+    major: f64,
+    overall: f64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -58,11 +84,11 @@ struct Education {
     #[serde(deserialize_with = "datetime_to_option_string")]
     end_date: Option<String>,
     current: bool,
-    gpa: f64,
+    gpa: GradePointAverage,
     achievements: Vec<String>,
-    course: String,
     location: String,
     degree: String,
+    latin_honors: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -89,7 +115,6 @@ struct Author {
     picture: String,
     phone: String,
     website: String,
-    summary: String,
     location: Location,
     social: HashMap<String, Social>,
     experiences: Vec<Experience>,
@@ -116,41 +141,70 @@ where
     Ok(opt.map(|d: Datetime| d.to_string()))
 }
 
+fn escape_latex(value: &Value, _: &HashMap<String, Value>) -> tera::Result<Value> {
+    let input = try_get_value!("escape_latex", "value", String, value);
+    let mut output = String::with_capacity(input.len() * 2);
+    for c in input.chars() {
+        match c {
+            '&' | '%' | '#' | '$' => output.push_str(format!("\\{}", c).as_str()),
+            _ => output.push(c),
+        }
+    }
+
+    Ok(Value::String(output))
+}
+
 fn main() {
-    let path = Path::new("/Users/mtstanley/repos/rsume/resume.tex");
-    // let content = fs::read_to_string(AsRef::<Path>::as_ref(path)).expect("unable to read file");
+    let args = Args::parse();
 
     let author: Author = toml::from_str(
-        fs::read_to_string(Path::new("/Users/mtstanley/repos/rsume/author.toml"))
+        fs::read_to_string(args.input_path)
             .expect("couldn't read toml data file")
             .as_str(),
     )
     .expect("couldn't parse toml data");
 
-    let tera = match Tera::new("templates/*") {
+    let mut tera = match Tera::new(
+        args.template_path
+            .to_str()
+            .expect("Template path must be present"),
+    ) {
         Ok(t) => t,
         Err(e) => {
             print!("Parsing error(s): {}", e);
             ::std::process::exit(1);
         }
     };
+    tera.register_filter("escape_latex", escape_latex);
 
     let rendered = tera
         .render(
-            "resume.tex",
+            &args.template_filename,
             &Context::from_serialize(&author)
                 .expect("couldn't convert author struct to tera context"),
         )
         .expect("rending template failed");
 
-    let mut file = File::create("rendered.tex").expect("couldn't write rendered tex file");
-    file.write_all(rendered.as_bytes())
-        .expect("couldn't write rendered tex file");
+    // File::create(Path::new("rendered.tex"))
+    //     .expect("cannot create file")
+    //     .write_all(rendered.as_bytes())
+    //     .expect("failed to write rendered template");
 
-    latex_to_pdf_2(path, rendered).expect("processing failed");
+    latex_to_pdf(
+        args.tex_root,
+        args.template_filename,
+        rendered,
+        args.output_root,
+    )
+    .expect("processing failed");
 }
 
-pub fn latex_to_pdf_2<P: AsRef<Path>>(latex_path: P, content: String) -> Result<()> {
+pub fn latex_to_pdf(
+    tex_root: PathBuf,
+    tex_filename: String,
+    content: String,
+    output_root: PathBuf,
+) -> Result<()> {
     let mut status = status::NoopStatusBackend::default();
 
     let auto_create_config_file = false;
@@ -169,26 +223,15 @@ pub fn latex_to_pdf_2<P: AsRef<Path>>(latex_path: P, content: String) -> Result<
         let mut sb = driver::ProcessingSessionBuilder::default();
         sb.bundle(bundle)
             .primary_input_buffer(content.as_bytes())
-            .filesystem_root(
-                latex_path
-                    .as_ref()
-                    .parent()
-                    .expect("filepath has no parent"),
-            )
-            .tex_input_name(
-                latex_path
-                    .as_ref()
-                    .file_name()
-                    .expect("filename was empty")
-                    .to_str()
-                    .expect("cannot convert osstring to string"),
-            )
+            .filesystem_root(tex_root.as_path().parent().expect("filepath has no parent"))
+            .tex_input_name(&tex_filename)
             .format_name("latex")
             .format_cache_path(format_cache_path)
-            .keep_logs(true)
+            .keep_logs(false)
             .keep_intermediates(false)
             .print_stdout(false)
-            .output_format(driver::OutputFormat::Pdf);
+            .output_format(driver::OutputFormat::Pdf)
+            .output_dir(output_root);
 
         let mut sess =
             ctry!(sb.create(&mut status); "failed to initialize the LaTeX processing session");
