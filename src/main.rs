@@ -4,7 +4,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use tectonic::errors::Result;
 use tectonic::{config, ctry, driver, status};
 use tera::{try_get_value, Context, Tera, Value};
 
@@ -185,10 +184,13 @@ fn main() {
         )
         .expect("rending template failed");
 
-    // File::create(Path::new("rendered.tex"))
-    //     .expect("cannot create file")
-    //     .write_all(rendered.as_bytes())
-    //     .expect("failed to write rendered template");
+    let should_output_tex_file = false;
+    if should_output_tex_file {
+        File::create(Path::new("rendered.tex"))
+            .expect("cannot create file")
+            .write_all(rendered.as_bytes())
+            .expect("failed to write rendered template");
+    }
 
     latex_to_pdf(
         args.tex_root,
@@ -204,7 +206,7 @@ pub fn latex_to_pdf(
     tex_filename: String,
     content: String,
     output_root: PathBuf,
-) -> Result<()> {
+) -> Result<(), tectonic::Error> {
     let mut status = status::NoopStatusBackend::default();
 
     let auto_create_config_file = false;
@@ -212,7 +214,7 @@ pub fn latex_to_pdf(
                        "failed to open the default configuration file");
 
     let only_cached = false;
-    let bundle = ctry!(config.default_bundle(only_cached, &mut status);
+    let bundle = ctry!(config.default_bundle(only_cached);
                        "failed to load the default resource bundle");
 
     let format_cache_path = ctry!(config.format_cache_path();
